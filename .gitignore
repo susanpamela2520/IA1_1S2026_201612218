@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.env
+
+# Modelos entrenados (pesados)
+models/*.pkl
+models/*.json
+
+# Dataset
+dataset/*.csv
+
+# Config local
+config/settings.json
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
