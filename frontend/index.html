@@ -1,0 +1,958 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HandTalk AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0c0f;
+      --surface: #13161b;
+      --surface2: #1c2028;
+      --border: #252930;
+      --accent: #00e5a0;
+      --accent2: #7c6ef8;
+      --warn: #f5a623;
+      --danger: #ff5252;
+      --text: #e8eaf0;
+      --muted: #6b7280;
+      --font-mono: 'Space Mono', monospace;
+      --font-body: 'DM Sans', sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-body);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Noise texture overlay ── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none; z-index: 1000; opacity: 0.35;
+    }
+
+    /* ── Top bar ── */
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 2rem; height: 56px;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 100;
+    }
+    .logo {
+      font-family: var(--font-mono); font-size: 1rem; letter-spacing: 0.05em;
+      color: var(--accent); display: flex; align-items: center; gap: 0.5rem;
+    }
+    .logo-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+    .status-bar { display: flex; align-items: center; gap: 1rem; font-size: 0.78rem; color: var(--muted); }
+    .status-indicator { display: flex; align-items: center; gap: 0.35rem; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+    .dot.connected { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+    .dot.disconnected { background: var(--danger); }
+
+    /* ── Tab nav ── */
+    nav {
+      display: flex; gap: 0; background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    nav button {
+      padding: 0.65rem 1.4rem; background: none; border: none; border-bottom: 2px solid transparent;
+      color: var(--muted); font-family: var(--font-body); font-size: 0.85rem; font-weight: 500;
+      cursor: pointer; transition: all 0.2s;
+    }
+    nav button:hover { color: var(--text); }
+    nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Layout ── */
+    .page { display: none; padding: 1.5rem 2rem; }
+    .page.visible { display: block; animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+
+    /* ── Main page ── */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 1.5rem;
+      max-width: 1200px;
+    }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden;
+    }
+    .card-header {
+      padding: 0.75rem 1rem; border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.08em;
+      color: var(--muted); text-transform: uppercase;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+
+    /* ── Camera feed ── */
+    .feed-wrapper {
+      position: relative; background: #000; aspect-ratio: 4/3;
+      display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    #videoEl, #annotatedEl {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover;
+    }
+    #annotatedEl { opacity: 0; transition: opacity 0.15s; }
+    #annotatedEl.show { opacity: 1; }
+
+    .feed-overlay {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      padding: 0.5rem 0.75rem;
+      background: linear-gradient(transparent, rgba(0,0,0,0.75));
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .feed-badge {
+      font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.06em;
+      color: var(--accent); background: rgba(0,229,160,0.12);
+      border: 1px solid rgba(0,229,160,0.3); border-radius: 4px; padding: 2px 8px;
+    }
+    .fps-display { font-family: var(--font-mono); font-size: 0.65rem; color: var(--muted); }
+
+    /* ── Prediction panel ── */
+    .prediction-panel { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+
+    .pred-word-display {
+      text-align: center; padding: 1.5rem;
+      background: linear-gradient(135deg, rgba(124,110,248,0.08), rgba(0,229,160,0.05));
+      border: 1px solid var(--border); border-radius: 8px;
+    }
+    .pred-label { font-size: 0.7rem; font-family: var(--font-mono); color: var(--muted); letter-spacing: 0.1em; margin-bottom: 0.5rem; }
+    .pred-word {
+      font-size: 2.2rem; font-weight: 600; color: var(--text);
+      font-family: var(--font-body); letter-spacing: -0.02em;
+      min-height: 2.8rem; transition: all 0.2s;
+    }
+    .pred-word.detected { color: var(--accent); text-shadow: 0 0 20px rgba(0,229,160,0.3); }
+    .pred-word.waiting { color: var(--muted); font-size: 1rem; margin-top: 0.5rem; }
+
+    .confidence-bar-wrap { display: flex; flex-direction: column; gap: 0.4rem; }
+    .conf-labels { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--muted); }
+    .conf-bar-bg { height: 6px; background: var(--surface2); border-radius: 3px; overflow: hidden; }
+    .conf-bar-fill {
+      height: 100%; width: 0%; border-radius: 3px;
+      background: linear-gradient(90deg, var(--accent2), var(--accent));
+      transition: width 0.3s ease;
+    }
+
+    /* ── Message builder ── */
+    .msg-history {
+      max-height: 120px; overflow-y: auto; display: flex; flex-direction: column; gap: 0.4rem;
+    }
+    .msg-chip {
+      display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.6rem;
+      background: var(--surface2); border-radius: 6px; font-size: 0.78rem;
+    }
+    .msg-chip .word { font-weight: 600; color: var(--accent); }
+    .msg-chip .time { font-size: 0.65rem; color: var(--muted); margin-left: auto; }
+    .msg-chip .btn-remove { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.8rem; padding: 0; }
+    .msg-chip .btn-remove:hover { color: var(--danger); }
+
+    /* ── Buttons ── */
+    .btn {
+      display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+      padding: 0.65rem 1.2rem; border-radius: 7px; border: none; cursor: pointer;
+      font-family: var(--font-body); font-size: 0.85rem; font-weight: 500;
+      transition: all 0.18s; user-select: none;
+    }
+    .btn-primary {
+      background: var(--accent); color: #0a0c0f;
+    }
+    .btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-secondary {
+      background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--muted); }
+    .btn-danger { background: rgba(255,82,82,0.15); color: var(--danger); border: 1px solid rgba(255,82,82,0.3); }
+    .btn-danger:hover { background: rgba(255,82,82,0.25); }
+
+    .btn-row { display: flex; gap: 0.5rem; }
+
+    /* ── Add to message button ── */
+    .btn-add-word {
+      width: 100%; padding: 0.55rem; border-radius: 6px; border: 1px dashed var(--border);
+      background: none; color: var(--muted); cursor: pointer; font-size: 0.8rem;
+      transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+    }
+    .btn-add-word:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .btn-add-word:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    /* ── Toast notifications ── */
+    #toast-container {
+      position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 999;
+      display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none;
+    }
+    .toast {
+      padding: 0.65rem 1rem; border-radius: 8px; font-size: 0.82rem;
+      animation: toastIn 0.25s ease forwards;
+      pointer-events: auto; max-width: 300px;
+      display: flex; align-items: center; gap: 0.5rem;
+    }
+    .toast.success { background: rgba(0,229,160,0.15); border: 1px solid rgba(0,229,160,0.4); color: var(--accent); }
+    .toast.error   { background: rgba(255,82,82,0.15); border: 1px solid rgba(255,82,82,0.4); color: var(--danger); }
+    .toast.info    { background: rgba(124,110,248,0.15); border: 1px solid rgba(124,110,248,0.4); color: #a89ef9; }
+    @keyframes toastIn { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:none; } }
+
+    /* ── Admin page ── */
+    .admin-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 1.25rem;
+      max-width: 1100px;
+    }
+    .form-group { display: flex; flex-direction: column; gap: 0.35rem; margin-bottom: 0.9rem; }
+    label { font-size: 0.78rem; color: var(--muted); font-weight: 500; }
+    input[type=text], input[type=number], input[type=password], textarea, select {
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text); font-family: var(--font-body); font-size: 0.85rem;
+      padding: 0.55rem 0.75rem; outline: none; transition: border-color 0.2s; width: 100%;
+    }
+    input:focus, textarea:focus, select:focus { border-color: var(--accent2); }
+    textarea { resize: vertical; min-height: 70px; }
+
+    .range-row { display: flex; align-items: center; gap: 0.75rem; }
+    input[type=range] { flex: 1; accent-color: var(--accent); }
+    .range-val { font-family: var(--font-mono); font-size: 0.85rem; color: var(--accent); min-width: 3rem; text-align: right; }
+
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; }
+    .toggle {
+      position: relative; width: 40px; height: 22px;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle-slider {
+      position: absolute; cursor: pointer; inset: 0;
+      background: var(--surface2); border: 1px solid var(--border); border-radius: 22px;
+      transition: 0.2s;
+    }
+    .toggle-slider::before {
+      content: ''; position: absolute; height: 14px; width: 14px; left: 3px; bottom: 3px;
+      background: var(--muted); border-radius: 50%; transition: 0.2s;
+    }
+    .toggle input:checked + .toggle-slider { background: rgba(0,229,160,0.2); border-color: var(--accent); }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(18px); background: var(--accent); }
+
+    /* ── Metrics page ── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 1rem; max-width: 1100px; margin-bottom: 1.5rem;
+    }
+    .metric-card {
+      background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+      padding: 1rem;
+    }
+    .metric-label { font-size: 0.7rem; font-family: var(--font-mono); color: var(--muted); letter-spacing: 0.06em; margin-bottom: 0.4rem; }
+    .metric-value { font-size: 1.6rem; font-weight: 600; font-family: var(--font-body); }
+    .metric-value.green { color: var(--accent); }
+    .metric-value.purple { color: var(--accent2); }
+    .metric-value.orange { color: var(--warn); }
+
+    /* ── History table ── */
+    .history-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .history-table th {
+      text-align: left; padding: 0.5rem 0.75rem;
+      font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.08em;
+      color: var(--muted); border-bottom: 1px solid var(--border); text-transform: uppercase;
+    }
+    .history-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); color: var(--text); }
+    .history-table tr:last-child td { border-bottom: none; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-family: var(--font-mono); }
+    .badge.ok { background: rgba(0,229,160,0.12); color: var(--accent); }
+    .badge.fail { background: rgba(255,82,82,0.12); color: var(--danger); }
+
+    /* ── Signs list ── */
+    .signs-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    .sign-chip {
+      padding: 0.3rem 0.75rem; border-radius: 20px; font-size: 0.8rem;
+      background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+      font-weight: 500;
+    }
+
+    /* ── Hand not detected indicator ── */
+    .no-hand-overlay {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: rgba(10,12,15,0.6); transition: opacity 0.2s; pointer-events: none;
+    }
+    .no-hand-overlay.hidden { opacity: 0; }
+    .no-hand-msg { font-size: 0.8rem; color: var(--muted); font-family: var(--font-mono); }
+
+    .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .section-title { font-size: 0.7rem; font-family: var(--font-mono); color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.75rem; }
+  </style>
+</head>
+<body>
+
+<!-- ─── Header ─────────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <div class="logo-dot" id="wsDot"></div>
+    HandTalk AI
+  </div>
+  <div class="status-bar">
+    <div class="status-indicator">
+      <div class="dot" id="connDot"></div>
+      <span id="connLabel">Desconectado</span>
+    </div>
+    <span id="modelStatus" style="color:var(--warn)">Modelo no cargado</span>
+  </div>
+</header>
+
+<!-- ─── Tab nav ─────────────────────────────────────────────────────────────── -->
+<nav>
+  <button class="active" onclick="showTab('main', this)">🎯 Reconocimiento</button>
+  <button onclick="showTab('admin', this)">⚙️ Administrador</button>
+  <button onclick="showTab('metrics', this)">📊 Métricas</button>
+  <button onclick="showTab('history', this)">📨 Historial</button>
+</nav>
+
+<!-- ─── MAIN PAGE ────────────────────────────────────────────────────────────── -->
+<div id="page-main" class="page visible">
+  <div class="main-grid">
+
+    <!-- Camera feed -->
+    <div>
+      <div class="card">
+        <div class="card-header">
+          <span>FEED EN TIEMPO REAL</span>
+          <div class="btn-row">
+            <button class="btn btn-secondary" style="padding:0.3rem 0.7rem;font-size:0.75rem" id="toggleCapture" onclick="toggleCapture()">⏸ Pausar</button>
+            <button class="btn btn-secondary" style="padding:0.3rem 0.7rem;font-size:0.75rem" id="toggleAnnotated" onclick="toggleAnnotated()">👁 Landmarks</button>
+          </div>
+        </div>
+        <div class="feed-wrapper">
+          <video id="videoEl" autoplay playsinline muted></video>
+          <img id="annotatedEl" alt="" />
+          <div class="no-hand-overlay" id="noHandOverlay">
+            <span class="no-hand-msg">Muestra tu mano a la cámara</span>
+          </div>
+          <div class="feed-overlay">
+            <span class="feed-badge" id="handBadge">SIN MANO</span>
+            <span class="fps-display" id="fpsDisplay">-- ms</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right panel -->
+    <div style="display:flex;flex-direction:column;gap:1rem;">
+
+      <!-- Predicción actual -->
+      <div class="card">
+        <div class="card-header"><span>PREDICCIÓN ACTUAL</span></div>
+        <div class="prediction-panel">
+          <div class="pred-word-display">
+            <div class="pred-label">SEÑA DETECTADA</div>
+            <div class="pred-word waiting" id="predWord">Esperando...</div>
+          </div>
+          <div class="confidence-bar-wrap">
+            <div class="conf-labels">
+              <span>Confianza</span>
+              <span id="confVal">0%</span>
+            </div>
+            <div class="conf-bar-bg">
+              <div class="conf-bar-fill" id="confBar"></div>
+            </div>
+          </div>
+          <button class="btn-add-word" id="btnAddWord" disabled onclick="addWordToMessage()">
+            + Agregar al mensaje
+          </button>
+        </div>
+      </div>
+
+      <!-- Constructor de mensaje -->
+      <div class="card">
+        <div class="card-header">
+          <span>MENSAJE A ENVIAR</span>
+          <button class="btn btn-secondary" style="padding:0.2rem 0.6rem;font-size:0.7rem" onclick="clearMessage()">Limpiar</button>
+        </div>
+        <div class="prediction-panel">
+          <div class="msg-history scrollbar-thin" id="msgHistory">
+            <span style="font-size:0.78rem;color:var(--muted);padding:0.25rem 0">Sin palabras aún</span>
+          </div>
+          <button class="btn btn-primary" id="btnSendTelegram" disabled onclick="sendToTelegram()">
+            ✈️ Enviar a Telegram
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ─── ADMIN PAGE ───────────────────────────────────────────────────────────── -->
+<div id="page-admin" class="page">
+  <div class="admin-grid">
+
+    <!-- Telegram -->
+    <div class="card">
+      <div class="card-header"><span>CONFIGURACIÓN TELEGRAM</span></div>
+      <div style="padding:1rem;">
+        <div class="form-group">
+          <label>Bot Token</label>
+          <input type="password" id="cfgToken" placeholder="123456:ABCdef..." />
+        </div>
+        <div class="form-group">
+          <label>Chat ID (grupo o usuario)</label>
+          <input type="text" id="cfgChatId" placeholder="-1001234567890" />
+        </div>
+        <div class="form-group">
+          <label>Formato del mensaje</label>
+          <textarea id="cfgMsgFormat" rows="3"></textarea>
+          <span style="font-size:0.7rem;color:var(--muted)">Variables: {word} {confidence} {timestamp}</span>
+        </div>
+        <div class="toggle-row" style="margin-bottom:1rem;">
+          <label style="font-size:0.82rem;color:var(--text)">Envío a Telegram activo</label>
+          <label class="toggle">
+            <input type="checkbox" id="cfgTelegramEnabled" />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" style="flex:1" onclick="saveConfig()">💾 Guardar</button>
+          <button class="btn btn-secondary" onclick="testTelegram()">🧪 Probar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Umbral de confianza -->
+    <div class="card">
+      <div class="card-header"><span>PARÁMETROS DEL MODELO</span></div>
+      <div style="padding:1rem;">
+        <div class="form-group">
+          <label>Umbral de Confianza</label>
+          <div class="range-row">
+            <input type="range" id="cfgThreshold" min="0.1" max="1" step="0.05"
+              oninput="document.getElementById('threshVal').textContent=Math.round(this.value*100)+'%'" />
+            <span class="range-val" id="threshVal">70%</span>
+          </div>
+          <span style="font-size:0.7rem;color:var(--muted)">Predicciones por debajo de este valor son descartadas</span>
+        </div>
+        <div class="toggle-row" style="margin-bottom:1rem;">
+          <label style="font-size:0.82rem;color:var(--text)">Captura activa</label>
+          <label class="toggle">
+            <input type="checkbox" id="cfgCapture" checked />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+        <button class="btn btn-primary" style="width:100%" onclick="saveConfig()">💾 Guardar cambios</button>
+      </div>
+    </div>
+
+    <!-- Señas disponibles -->
+    <div class="card">
+      <div class="card-header"><span>SEÑAS DISPONIBLES</span></div>
+      <div style="padding:1rem;">
+        <div class="signs-grid" id="adminSignsList"></div>
+        <div style="margin-top:1rem;display:flex;gap:0.5rem;">
+          <input type="text" id="newSignInput" placeholder="nueva_seña" style="flex:1" />
+          <button class="btn btn-secondary" onclick="addSign()">+ Añadir</button>
+        </div>
+        <button class="btn btn-primary" style="width:100%;margin-top:0.75rem" onclick="saveConfig()">💾 Guardar lista</button>
+      </div>
+    </div>
+
+    <!-- Modelo -->
+    <div class="card">
+      <div class="card-header"><span>ESTADO DEL MODELO</span></div>
+      <div style="padding:1rem;">
+        <div id="modelInfo" style="font-size:0.82rem;color:var(--muted);line-height:1.8;margin-bottom:1rem;">Cargando...</div>
+        <button class="btn btn-secondary" style="width:100%" onclick="reloadModel()">🔄 Recargar modelo</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ─── METRICS PAGE ─────────────────────────────────────────────────────────── -->
+<div id="page-metrics" class="page">
+  <div class="metrics-grid" id="metricsGrid">
+    <!-- Cards rendered by JS -->
+  </div>
+  <div class="card" style="max-width:1100px;">
+    <div class="card-header">
+      <span>SEÑAS DISPONIBLES EN MODELO</span>
+      <button class="btn btn-secondary" style="padding:0.3rem 0.7rem;font-size:0.75rem" onclick="loadMetrics()">↻ Actualizar</button>
+    </div>
+    <div style="padding:1rem;">
+      <div class="signs-grid" id="metricsSignsList"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── HISTORY PAGE ─────────────────────────────────────────────────────────── -->
+<div id="page-history" class="page">
+  <div style="max-width:1100px;">
+    <div style="display:flex;justify-content:flex-end;margin-bottom:1rem;gap:0.5rem;">
+      <button class="btn btn-secondary" onclick="loadHistory()">↻ Actualizar</button>
+      <button class="btn btn-danger" onclick="clearHistory()">🗑 Limpiar historial</button>
+    </div>
+    <div class="card">
+      <div class="card-header"><span>HISTORIAL DE MENSAJES ENVIADOS</span></div>
+      <div style="overflow-x:auto;">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Seña</th>
+              <th>Confianza</th>
+              <th>Mensaje</th>
+              <th>Estado</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody">
+            <tr><td colspan="5" style="text-align:center;color:var(--muted);padding:2rem">Sin historial</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Toast container ───────────────────────────────────────────────────────── -->
+<div id="toast-container"></div>
+
+<!-- ─── SCRIPT ────────────────────────────────────────────────────────────────── -->
+<script>
+// ── State ────────────────────────────────────────────────────────────────────
+const state = {
+  ws: null,
+  capturing: true,
+  showAnnotated: false,
+  currentWord: null,
+  currentConf: 0,
+  message: [],          // [{word, conf, ts}]
+  frameInterval: null,
+  config: {},
+};
+
+// ── WebSocket ────────────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  state.ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  state.ws.onopen = () => {
+    setConnStatus(true);
+    loadConfig();
+    loadModelStatus();
+  };
+
+  state.ws.onclose = () => {
+    setConnStatus(false);
+    setTimeout(connectWS, 2000);
+  };
+
+  state.ws.onerror = () => {
+    setConnStatus(false);
+  };
+
+  state.ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'prediction') handlePrediction(msg);
+    else if (msg.type === 'telegram_result') handleTelegramResult(msg);
+    else if (msg.type === 'model_reloaded') handleModelReloaded(msg);
+    else if (msg.type === 'paused') { /* silently ignore */ }
+  };
+}
+
+function setConnStatus(ok) {
+  document.getElementById('connDot').className = 'dot ' + (ok ? 'connected' : 'disconnected');
+  document.getElementById('connLabel').textContent = ok ? 'Conectado' : 'Desconectado';
+}
+
+// ── Camera ───────────────────────────────────────────────────────────────────
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    const video = document.getElementById('videoEl');
+    video.srcObject = stream;
+    video.onloadedmetadata = () => startFrameLoop();
+  } catch (err) {
+    showToast('❌ No se pudo acceder a la cámara: ' + err.message, 'error');
+  }
+}
+
+function startFrameLoop() {
+  const canvas = document.createElement('canvas');
+  const video = document.getElementById('videoEl');
+  canvas.width = 320; canvas.height = 240;   // reducido para velocidad
+  const ctx = canvas.getContext('2d');
+
+  clearInterval(state.frameInterval);
+  state.frameInterval = setInterval(() => {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+    if (!state.capturing) return;
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const b64 = canvas.toDataURL('image/jpeg', 0.7);
+    state.ws.send(JSON.stringify({ type: 'frame', data: b64 }));
+  }, 100);   // 10 fps al backend
+}
+
+// ── Prediction handling ───────────────────────────────────────────────────────
+function handlePrediction(msg) {
+  const wordEl = document.getElementById('predWord');
+  const confBar = document.getElementById('confBar');
+  const confVal = document.getElementById('confVal');
+  const handBadge = document.getElementById('handBadge');
+  const noHandOverlay = document.getElementById('noHandOverlay');
+  const fpsDisplay = document.getElementById('fpsDisplay');
+  const annotatedEl = document.getElementById('annotatedEl');
+
+  fpsDisplay.textContent = `${msg.processing_ms ?? '--'} ms`;
+
+  if (!msg.hand_detected) {
+    handBadge.textContent = 'SIN MANO';
+    handBadge.style.color = 'var(--muted)';
+    noHandOverlay.classList.remove('hidden');
+    wordEl.textContent = 'Esperando...';
+    wordEl.className = 'pred-word waiting';
+    confBar.style.width = '0%';
+    confVal.textContent = '0%';
+    state.currentWord = null;
+    document.getElementById('btnAddWord').disabled = true;
+    return;
+  }
+
+  noHandOverlay.classList.add('hidden');
+  handBadge.textContent = 'MANO ✓';
+  handBadge.style.color = 'var(--accent)';
+
+  if (msg.annotated_image && state.showAnnotated) {
+    annotatedEl.src = msg.annotated_image;
+    annotatedEl.classList.add('show');
+  } else {
+    annotatedEl.classList.remove('show');
+  }
+
+  const pct = Math.round((msg.confidence || 0) * 100);
+  confBar.style.width = pct + '%';
+  confVal.textContent = pct + '%';
+
+  if (msg.word) {
+    wordEl.textContent = msg.word;
+    wordEl.className = 'pred-word detected';
+    state.currentWord = msg.word;
+    state.currentConf = msg.confidence;
+    document.getElementById('btnAddWord').disabled = false;
+  } else {
+    wordEl.textContent = 'Confianza baja';
+    wordEl.className = 'pred-word waiting';
+    state.currentWord = null;
+    document.getElementById('btnAddWord').disabled = true;
+  }
+}
+
+// ── Message builder ───────────────────────────────────────────────────────────
+function addWordToMessage() {
+  if (!state.currentWord) return;
+  const ts = new Date().toLocaleTimeString('es-GT', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  state.message.push({ word: state.currentWord, conf: state.currentConf, ts });
+  renderMessage();
+  showToast(`"${state.currentWord}" añadido al mensaje`, 'info');
+}
+
+function renderMessage() {
+  const container = document.getElementById('msgHistory');
+  const sendBtn = document.getElementById('btnSendTelegram');
+
+  if (state.message.length === 0) {
+    container.innerHTML = '<span style="font-size:0.78rem;color:var(--muted);padding:0.25rem 0">Sin palabras aún</span>';
+    sendBtn.disabled = true;
+    return;
+  }
+
+  sendBtn.disabled = false;
+  container.innerHTML = state.message.map((item, i) => `
+    <div class="msg-chip">
+      <span class="word">${item.word}</span>
+      <span style="font-size:0.7rem;color:var(--muted)">${Math.round(item.conf * 100)}%</span>
+      <span class="time">${item.ts}</span>
+      <button class="btn-remove" onclick="removeWord(${i})">✕</button>
+    </div>
+  `).join('');
+}
+
+function removeWord(i) {
+  state.message.splice(i, 1);
+  renderMessage();
+}
+
+function clearMessage() {
+  state.message = [];
+  renderMessage();
+}
+
+function sendToTelegram() {
+  if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+    showToast('Sin conexión al servidor', 'error'); return;
+  }
+  if (state.message.length === 0) return;
+
+  const words = state.message.map(m => m.word).join(' ');
+  const avgConf = state.message.reduce((s, m) => s + m.conf, 0) / state.message.length;
+
+  state.ws.send(JSON.stringify({ type: 'send_telegram', word: words, confidence: avgConf }));
+}
+
+function handleTelegramResult(msg) {
+  if (msg.success) {
+    showToast('✅ Mensaje enviado a Telegram', 'success');
+    clearMessage();
+  } else {
+    showToast(`❌ Error Telegram: ${msg.error || 'desconocido'}`, 'error');
+  }
+}
+
+// ── Controls ──────────────────────────────────────────────────────────────────
+function toggleCapture() {
+  state.capturing = !state.capturing;
+  const btn = document.getElementById('toggleCapture');
+  btn.textContent = state.capturing ? '⏸ Pausar' : '▶ Reanudar';
+}
+
+function toggleAnnotated() {
+  state.showAnnotated = !state.showAnnotated;
+  const btn = document.getElementById('toggleAnnotated');
+  btn.style.color = state.showAnnotated ? 'var(--accent)' : '';
+}
+
+// ── Config API ────────────────────────────────────────────────────────────────
+async function loadConfig() {
+  try {
+    const res = await fetch('/api/config');
+    const cfg = await res.json();
+    state.config = cfg;
+    applyConfigToForm(cfg);
+  } catch(e) { console.error(e); }
+}
+
+function applyConfigToForm(cfg) {
+  const s = v => v != null ? v : '';
+  document.getElementById('cfgToken').value = s(cfg.telegram_bot_token);
+  document.getElementById('cfgChatId').value = s(cfg.telegram_chat_id);
+  document.getElementById('cfgMsgFormat').value = s(cfg.telegram_message_format);
+  document.getElementById('cfgTelegramEnabled').checked = !!cfg.telegram_enabled;
+  document.getElementById('cfgCapture').checked = cfg.capture_active !== false;
+
+  const thresh = cfg.confidence_threshold || 0.7;
+  document.getElementById('cfgThreshold').value = thresh;
+  document.getElementById('threshVal').textContent = Math.round(thresh * 100) + '%';
+
+  renderSignsAdmin(cfg.available_signs || []);
+}
+
+function renderSignsAdmin(signs) {
+  const el = document.getElementById('adminSignsList');
+  el.innerHTML = signs.map((s, i) => `
+    <div class="sign-chip" style="display:flex;align-items:center;gap:0.4rem">
+      ${s}
+      <button onclick="removeSign(${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:0.75rem">✕</button>
+    </div>
+  `).join('');
+}
+
+function addSign() {
+  const input = document.getElementById('newSignInput');
+  const val = input.value.trim().toLowerCase().replace(/\s+/g,'_');
+  if (!val) return;
+  if (!state.config.available_signs) state.config.available_signs = [];
+  if (!state.config.available_signs.includes(val)) {
+    state.config.available_signs.push(val);
+    renderSignsAdmin(state.config.available_signs);
+  }
+  input.value = '';
+}
+
+function removeSign(i) {
+  state.config.available_signs.splice(i, 1);
+  renderSignsAdmin(state.config.available_signs);
+}
+
+async function saveConfig() {
+  const body = {
+    confidence_threshold: parseFloat(document.getElementById('cfgThreshold').value),
+    telegram_enabled: document.getElementById('cfgTelegramEnabled').checked,
+    telegram_message_format: document.getElementById('cfgMsgFormat').value,
+    capture_active: document.getElementById('cfgCapture').checked,
+    available_signs: state.config.available_signs || [],
+  };
+
+  // Token (campo separado)
+  await fetch('/api/config/token', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      telegram_bot_token: document.getElementById('cfgToken').value,
+      telegram_chat_id: document.getElementById('cfgChatId').value,
+    }),
+  });
+
+  const res = await fetch('/api/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (res.ok) showToast('✅ Configuración guardada', 'success');
+  else showToast('❌ Error al guardar', 'error');
+}
+
+async function testTelegram() {
+  const res = await fetch('/api/telegram/test', { method: 'POST' });
+  const data = await res.json();
+  if (data.success) showToast('✅ Mensaje de prueba enviado', 'success');
+  else showToast(`❌ ${data.error || 'Error al probar'}`, 'error');
+}
+
+// ── Model status ──────────────────────────────────────────────────────────────
+async function loadModelStatus() {
+  try {
+    const res = await fetch('/api/model/status');
+    const data = await res.json();
+    const statusEl = document.getElementById('modelStatus');
+    const infoEl = document.getElementById('modelInfo');
+
+    if (data.loaded) {
+      statusEl.textContent = `Modelo: ${data.classes.length} clases`;
+      statusEl.style.color = 'var(--accent)';
+      infoEl.innerHTML = `
+        <b>Estado:</b> ✅ Cargado<br>
+        <b>Clases:</b> ${data.classes.length}<br>
+        <b>Señas:</b> ${data.classes.join(', ')}<br>
+        <b>Ruta:</b> <code style="font-size:0.72rem">${data.model_path}</code>
+      `;
+      renderSignsMetrics(data.classes);
+    } else {
+      statusEl.textContent = 'Modelo no cargado';
+      statusEl.style.color = 'var(--warn)';
+      infoEl.innerHTML = `
+        <b>Estado:</b> ⚠️ No cargado<br><br>
+        <span style="color:var(--warn)">Entrena el modelo primero:<br>
+        <code style="font-size:0.72rem">python scripts/train_model.py</code></span>
+      `;
+    }
+  } catch(e) { console.error(e); }
+}
+
+function handleModelReloaded(msg) {
+  if (msg.loaded) {
+    showToast(`✅ Modelo recargado — ${msg.classes.length} clases`, 'success');
+    loadModelStatus();
+  } else {
+    showToast('⚠️ Modelo no encontrado', 'error');
+  }
+}
+
+function reloadModel() {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+    state.ws.send(JSON.stringify({ type: 'reload_model' }));
+  }
+}
+
+// ── Metrics ───────────────────────────────────────────────────────────────────
+async function loadMetrics() {
+  try {
+    const res = await fetch('/api/metrics');
+    const m = await res.json();
+
+    document.getElementById('metricsGrid').innerHTML = [
+      { label: 'FRAMES PROCESADOS', value: m.total_frames_processed, cls: 'purple' },
+      { label: 'MANOS DETECTADAS', value: m.hands_detected, cls: 'green' },
+      { label: 'PREDICCIONES OK', value: m.successful_predictions, cls: 'green' },
+      { label: 'BAJA CONFIANZA', value: m.low_confidence_predictions, cls: 'orange' },
+      { label: 'MSGS ENVIADOS', value: m.messages_sent_ok, cls: 'green' },
+      { label: 'MSGS FALLIDOS', value: m.messages_sent_fail, cls: 'orange' },
+      { label: 'TIEMPO PROM (ms)', value: m.avg_processing_ms, cls: 'purple' },
+      { label: 'PRECISIÓN PRED', value: (m.prediction_accuracy * 100).toFixed(1) + '%', cls: 'green' },
+    ].map(item => `
+      <div class="metric-card">
+        <div class="metric-label">${item.label}</div>
+        <div class="metric-value ${item.cls}">${item.value}</div>
+      </div>
+    `).join('');
+  } catch(e) { console.error(e); }
+}
+
+function renderSignsMetrics(signs) {
+  document.getElementById('metricsSignsList').innerHTML =
+    signs.map(s => `<div class="sign-chip">${s}</div>`).join('');
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+async function loadHistory() {
+  try {
+    const res = await fetch('/api/history');
+    const { history } = await res.json();
+    const body = document.getElementById('historyBody');
+
+    if (!history || history.length === 0) {
+      body.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:2rem">Sin historial</td></tr>';
+      return;
+    }
+
+    body.innerHTML = [...history].reverse().map(h => `
+      <tr>
+        <td style="font-family:var(--font-mono);font-size:0.75rem">${h.timestamp || '-'}</td>
+        <td style="font-weight:600;color:var(--accent)">${h.word || '-'}</td>
+        <td>${h.confidence ? Math.round(h.confidence * 100) + '%' : '-'}</td>
+        <td style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${h.message || '-'}</td>
+        <td><span class="badge ${h.sent_ok ? 'ok' : 'fail'}">${h.sent_ok ? '✓ OK' : '✗ FAIL'}</span></td>
+      </tr>
+    `).join('');
+  } catch(e) { console.error(e); }
+}
+
+async function clearHistory() {
+  await fetch('/api/history', { method: 'DELETE' });
+  await loadHistory();
+  showToast('Historial limpiado', 'info');
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────────
+function showTab(name, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('visible'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('visible');
+  btn.classList.add('active');
+
+  if (name === 'metrics') loadMetrics();
+  if (name === 'history') loadHistory();
+  if (name === 'admin') { loadConfig(); loadModelStatus(); }
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function showToast(msg, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateX(20px)'; el.style.transition = '0.3s'; }, 2500);
+  setTimeout(() => el.remove(), 2900);
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', () => {
+  connectWS();
+  startCamera();
+});
+</script>
+</body>
+</html>
