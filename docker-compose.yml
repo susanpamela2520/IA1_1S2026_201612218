@@ -1,0 +1,26 @@
+version: '3.9'
+
+services:
+  handtalk-ai:
+    build: .
+    container_name: handtalk_ai
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persistencia de modelos, dataset y configuración
+      - ./models:/app/models
+      - ./dataset:/app/dataset
+      - ./config:/app/config
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/model/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# Nota sobre la cámara web:
+# La cámara es accedida directamente desde el navegador del HOST mediante WebRTC.
+# El backend recibe los frames via WebSocket — no requiere acceso al /dev/video0 del host.
