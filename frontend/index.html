@@ -156,10 +156,10 @@
 </header>
 
 <nav>
-  <button class="active" onclick="showTab('main', this)">🎯 Reconocimiento</button>
-  <button onclick="showTab('admin', this)">⚙️ Administrador</button>
-  <button onclick="showTab('metrics', this)">📊 Métricas</button>
-  <button onclick="showTab('history', this)">📨 Historial</button>
+  <button class="active" onclick="showTab('main', this)"> Reconocimiento</button>
+  <button onclick="showTab('admin', this)"> Administrador</button>
+  <button onclick="showTab('metrics', this)"> Métricas</button>
+  <button onclick="showTab('history', this)"> Historial</button>
 </nav>
 
 <!-- MAIN -->
@@ -263,16 +263,18 @@
     </div>
 
     <div class="card">
-      <div class="card-header"><span>SEÑAS DISPONIBLES</span></div>
-      <div style="padding:1rem;">
-        <div class="signs-grid" id="adminSignsList"></div>
-        <div style="margin-top:1rem;display:flex;gap:0.5rem;">
-          <input type="text" id="newSignInput" placeholder="nueva_seña" style="flex:1" />
-          <button class="btn btn-secondary" onclick="addSign()">+ Añadir</button>
-        </div>
-        <button class="btn btn-primary" style="width:100%;margin-top:0.75rem" onclick="saveConfig()">💾 Guardar lista</button>
-      </div>
+  <div class="card-header"><span>GESTIÓN DE SEÑAS (CRUD)</span></div>
+  <div style="padding:1rem;">
+    <div id="adminSignsList" style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1rem;max-height:220px;overflow-y:auto;"></div>
+    <div style="display:flex;gap:0.5rem;margin-bottom:0.75rem;">
+      <input type="text" id="newSignInput" placeholder="nueva_seña" style="flex:1" />
+      <button class="btn btn-secondary" onclick="addSign()">+ Añadir</button>
     </div>
+    <button class="btn btn-primary" style="width:100%;margin-bottom:0.5rem" onclick="saveSignsList()">💾 Guardar lista</button>
+    <button class="btn btn-secondary" style="width:100%;background:rgba(124,110,248,0.15);color:var(--accent2);border-color:var(--accent2)" onclick="retrainModel()">🔁 Reentrenar modelo</button>
+    <div id="retrainStatus" style="font-size:0.75rem;color:var(--muted);margin-top:0.5rem;display:none"></div>
+  </div>
+</div>
 
     <div class="card">
       <div class="card-header"><span>ESTADO DEL MODELO</span></div>
@@ -497,8 +499,8 @@ function sendToTelegram() {
 }
 
 function handleTelegramResult(msg) {
-  if (msg.success) { showToast('✅ Mensaje enviado a Telegram', 'success'); clearMessage(); }
-  else showToast(`❌ Error: ${msg.error || 'desconocido'}`, 'error');
+  if (msg.success) { showToast(' Mensaje enviado a Telegram', 'success'); clearMessage(); }
+  else showToast(` Error: ${msg.error || 'desconocido'}`, 'error');
 }
 
 // ── Controles ─────────────────────────────────────────────────────────────────
@@ -567,10 +569,25 @@ function applyConfigToForm(cfg) {
 }
 
 function renderSignsAdmin(signs) {
-  document.getElementById('adminSignsList').innerHTML = signs.map((s, i) => `
-    <div class="sign-chip" style="display:flex;align-items:center;gap:0.4rem">
-      ${s}
-      <button onclick="removeSign(${i})" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:0.75rem">✕</button>
+  const el = document.getElementById('adminSignsList');
+  if (!signs || !signs.length) {
+    el.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">Sin señas configuradas</span>';
+    return;
+  }
+  el.innerHTML = signs.map((s, i) => `
+    <div style="display:flex;align-items:center;gap:0.5rem;background:var(--surface2);padding:0.4rem 0.75rem;border-radius:6px;">
+      <span style="color:var(--accent);font-weight:600;flex:1">${s}</span>
+      <input type="text" id="edit_${i}" value="${s}" 
+        style="flex:2;padding:0.3rem 0.5rem;font-size:0.8rem;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text)" 
+        placeholder="nuevo nombre"/>
+      <button onclick="updateSign('${s}', ${i})" 
+        style="background:rgba(0,229,160,0.1);border:1px solid var(--accent);color:var(--accent);border-radius:4px;padding:0.25rem 0.5rem;cursor:pointer;font-size:0.75rem">
+        ✏️
+      </button>
+      <button onclick="removeSign(${i})" 
+        style="background:rgba(255,82,82,0.1);border:1px solid var(--danger);color:var(--danger);border-radius:4px;padding:0.25rem 0.5rem;cursor:pointer;font-size:0.75rem">
+        🗑
+      </button>
     </div>
   `).join('');
 }
@@ -583,13 +600,72 @@ function addSign() {
   if (!state.config.available_signs.includes(val)) {
     state.config.available_signs.push(val);
     renderSignsAdmin(state.config.available_signs);
+    showToast(`"${val}" agregada`, 'info');
   }
   input.value = '';
 }
 
 function removeSign(i) {
+  const sign = state.config.available_signs[i];
   state.config.available_signs.splice(i, 1);
   renderSignsAdmin(state.config.available_signs);
+  showToast(`"${sign}" eliminada`, 'info');
+}
+
+async function updateSign(oldSign, i) {
+  const newVal = document.getElementById(`edit_${i}`).value.trim().toLowerCase().replace(/\s+/g,'_');
+  if (!newVal || newVal === oldSign) return;
+  if (!adminCredentials) { showLoginModal(); return; }
+  const res = await fetch(`/api/signs/${oldSign}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + adminCredentials },
+    body: JSON.stringify({ new_sign: newVal })
+  });
+  const data = await res.json();
+  if (data.status === 'ok') {
+    state.config.available_signs = data.signs;
+    renderSignsAdmin(data.signs);
+    showToast(`Seña actualizada a "${newVal}"`, 'success');
+  }
+}
+
+async function saveSignsList() {
+  if (!adminCredentials) { showLoginModal(); return; }
+  const headers = { 'Content-Type': 'application/json', 'Authorization': 'Basic ' + adminCredentials };
+  const res = await fetch('/api/config', {
+    method: 'PUT', headers,
+    body: JSON.stringify({ available_signs: state.config.available_signs })
+  });
+  if (res.ok) showToast(' Lista de señas guardada', 'success');
+  else showToast(' Error al guardar', 'error');
+}
+
+async function retrainModel() {
+  if (!adminCredentials) { showLoginModal(); return; }
+  const statusEl = document.getElementById('retrainStatus');
+  statusEl.style.display = 'block';
+  statusEl.style.color = 'var(--warn)';
+  statusEl.textContent = ' Reentrenando modelo... esto puede tardar 1-2 minutos';
+  
+  try {
+    const res = await fetch('/api/model/retrain', {
+      method: 'POST',
+      headers: { 'Authorization': 'Basic ' + adminCredentials }
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      statusEl.style.color = 'var(--accent)';
+      statusEl.textContent = ' Modelo reentrenado exitosamente';
+      showToast(' Modelo reentrenado', 'success');
+      loadModelStatus();
+    } else {
+      statusEl.style.color = 'var(--danger)';
+      statusEl.textContent = ' Error: ' + data.output;
+    }
+  } catch(e) {
+    statusEl.style.color = 'var(--danger)';
+    statusEl.textContent = ' Error de conexión';
+  }
 }
 
 async function saveConfig() {
@@ -608,14 +684,14 @@ async function saveConfig() {
   })});
   const res = await fetch('/api/config', { method: 'PUT', headers, body: JSON.stringify(body) });
   if (res.ok) showToast('✅ Configuración guardada', 'success');
-  else showToast('❌ Error al guardar', 'error');
+  else showToast(' Error al guardar', 'error');
 }
 
 async function testTelegram() {
   const res = await fetch('/api/telegram/test', { method: 'POST' });
   const data = await res.json();
   if (data.success) showToast('✅ Mensaje de prueba enviado', 'success');
-  else showToast(`❌ ${data.error || 'Error'}`, 'error');
+  else showToast(` ${data.error || 'Error'}`, 'error');
 }
 
 // ── Modelo ────────────────────────────────────────────────────────────────────
@@ -628,7 +704,7 @@ async function loadModelStatus() {
     if (data.loaded) {
       statusEl.textContent = `Modelo: ${data.classes.length} clases`;
       statusEl.style.color = 'var(--accent)';
-      if (infoEl) infoEl.innerHTML = `<b>Estado:</b> ✅ Cargado<br><b>Clases:</b> ${data.classes.length}<br><b>Señas:</b> ${data.classes.join(', ')}`;
+      if (infoEl) infoEl.innerHTML = `<b>Estado:</b>  Cargado<br><b>Clases:</b> ${data.classes.length}<br><b>Señas:</b> ${data.classes.join(', ')}`;
       renderSignsMetrics(data.classes);
     } else {
       statusEl.textContent = 'Modelo no cargado';
@@ -638,8 +714,8 @@ async function loadModelStatus() {
 }
 
 function handleModelReloaded(msg) {
-  if (msg.loaded) { showToast(`✅ Modelo recargado — ${msg.classes.length} clases`, 'success'); loadModelStatus(); }
-  else showToast('⚠️ Modelo no encontrado', 'error');
+  if (msg.loaded) { showToast(` Modelo recargado — ${msg.classes.length} clases`, 'success'); loadModelStatus(); }
+  else showToast(' Modelo no encontrado', 'error');
 }
 
 function reloadModel() {

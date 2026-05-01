@@ -324,3 +324,53 @@ async def telegram_test():
 async def get_signs():
     cfg = load_config()
     return {"signs": cfg["available_signs"]}
+
+
+import subprocess
+import sys
+
+@app.post("/api/signs")
+async def add_sign(body: dict, user: str = Depends(verify_admin)):
+    cfg = load_config()
+    sign = body.get("sign", "").strip().lower().replace(" ", "_")
+    if not sign:
+        raise HTTPException(status_code=400, detail="Nombre de seña inválido")
+    if sign not in cfg["available_signs"]:
+        cfg["available_signs"].append(sign)
+        save_config(cfg)
+    return {"status": "ok", "signs": cfg["available_signs"]}
+
+@app.delete("/api/signs/{sign}")
+async def delete_sign(sign: str, user: str = Depends(verify_admin)):
+    cfg = load_config()
+    if sign in cfg["available_signs"]:
+        cfg["available_signs"].remove(sign)
+        save_config(cfg)
+    return {"status": "ok", "signs": cfg["available_signs"]}
+
+@app.put("/api/signs/{old_sign}")
+async def update_sign(old_sign: str, body: dict, user: str = Depends(verify_admin)):
+    cfg = load_config()
+    new_sign = body.get("new_sign", "").strip().lower().replace(" ", "_")
+    if old_sign in cfg["available_signs"] and new_sign:
+        idx = cfg["available_signs"].index(old_sign)
+        cfg["available_signs"][idx] = new_sign
+        save_config(cfg)
+    return {"status": "ok", "signs": cfg["available_signs"]}
+
+@app.post("/api/model/retrain")
+async def retrain_model(user: str = Depends(verify_admin)):
+    try:
+        result = subprocess.run(
+            [sys.executable, "../scripts/train_model.py"],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            classifier.reload()
+            return {"status": "ok", "output": result.stdout[-500:]}
+        else:
+            return {"status": "error", "output": result.stderr[-500:]}
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "output": "Timeout — el entrenamiento tardó más de 2 minutos"}
+    except Exception as e:
+        return {"status": "error", "output": str(e)}
