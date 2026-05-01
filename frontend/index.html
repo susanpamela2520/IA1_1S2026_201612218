@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>HandTalk AI</title>
@@ -369,6 +371,7 @@
         </div>
         <div class="feed-wrapper">
           <video id="videoEl" autoplay playsinline muted></video>
+          <canvas id="canvasEl" style="display:none"></canvas>
           <img id="annotatedEl" alt="" />
           <div class="no-hand-overlay" id="noHandOverlay">
             <span class="no-hand-msg">Muestra tu mano a la cámara</span>
@@ -652,21 +655,88 @@ async function startCamera() {
   }
 }
 
-function startFrameLoop() {
-  const canvas = document.createElement('canvas');
-  const video = document.getElementById('videoEl');
-  canvas.width = 320; canvas.height = 240;   // reducido para velocidad
-  const ctx = canvas.getContext('2d');
+let mpHands = null;
+let mpCamera = null;
 
-  clearInterval(state.frameInterval);
-  state.frameInterval = setInterval(() => {
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ 
+      video: { width: 640, height: 480 } 
+    });
+    const video = document.getElementById('videoEl');
+    video.srcObject = stream;
+    video.onloadedmetadata = () => initMediaPipe(video);
+  } catch (err) {
+    showToast('❌ No se pudo acceder a la cámara: ' + err.message, 'error');
+  }
+}
+
+function initMediaPipe(video) {
+  mpHands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+
+  mpHands.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.4,
+  });
+
+  mpHands.onResults((results) => {
     if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
     if (!state.capturing) return;
 
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const b64 = canvas.toDataURL('image/jpeg', 0.7);
-    state.ws.send(JSON.stringify({ type: 'frame', data: b64 }));
-  }, 100);   // 10 fps al backend
+    const canvas = document.getElementById('canvasEl');
+    const ctx = canvas.getContext('2d');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(results.image, 0, 0);
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+      const landmarks = results.multiHandLandmarks[0];
+
+      // Dibujar landmarks
+      if (state.showAnnotated) {
+        drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#00e5a0', lineWidth: 2});
+        drawLandmarks(ctx, landmarks, {color: '#7c6ef8', lineWidth: 1, radius: 3});
+      }
+
+      // Extraer features: x, y, z de los 21 landmarks = 63 valores
+      const features = [];
+      for (const lm of landmarks) {
+        features.push(lm.x, lm.y, lm.z);
+      }
+
+      // Enviar solo los features al backend (no el frame completo)
+      state.ws.send(JSON.stringify({
+        type: 'landmarks',
+        features: features,
+        frame_b64: canvas.toDataURL('image/jpeg', 0.7)
+      }));
+
+      document.getElementById('noHandOverlay').classList.add('hidden');
+      document.getElementById('handBadge').textContent = 'MANO ✓';
+    } else {
+      document.getElementById('noHandOverlay').classList.remove('hidden');
+      document.getElementById('handBadge').textContent = 'SIN MANO';
+    }
+
+    // Actualizar imagen de la cámara
+    const ctk_img = canvas.toDataURL('image/jpeg', 0.7);
+    document.getElementById('annotatedEl').src = ctk_img;
+    document.getElementById('annotatedEl').classList.add('show');
+  });
+
+  mpCamera = new Camera(video, {
+    onFrame: async () => {
+      await mpHands.send({image: video});
+    },
+    width: 640,
+    height: 480,
+  });
+
+  mpCamera.start();
 }
 
 // ── Prediction handling ───────────────────────────────────────────────────────

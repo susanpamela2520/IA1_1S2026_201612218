@@ -149,7 +149,43 @@ async def ws_endpoint(ws: WebSocket):
                     "processing_ms": round(elapsed_ms, 1),
                 }))
 
-            # ── Enviar mensaje a Telegram ───────────────────────────────
+            #------- Enviar Landmarks a servidor-----*
+
+            elif kind == "landmarks":
+                if not cfg.get("capture_active", True):
+                    await ws.send_text(json.dumps({"type": "paused"}))
+                    continue
+
+                features_list = msg.get("features", [])
+                if not features_list or len(features_list) != 63:
+                    await ws.send_text(json.dumps({"type": "invalid_features"}))
+                    continue
+
+                import numpy as np
+                t0 = time.perf_counter()
+
+                _metrics["total_frames"] += 1
+                _metrics["hands_detected"] += 1
+
+                features = np.array(features_list, dtype=np.float32)
+                cfg = load_config()
+                word, conf = classifier.predict(features, cfg["confidence_threshold"])
+
+                if word:
+                    _metrics["successful_predictions"] += 1
+                else:
+                    _metrics["low_confidence"] += 1
+
+                await ws.send_text(json.dumps({
+                    "type": "prediction",
+                    "hand_detected": True,
+                    "word": word,
+                    "confidence": round(conf, 4),
+                    "annotated_image": msg.get("frame_b64"),
+                    "processing_ms": 0,
+                }))
+
+         # ── Enviar mensaje a Telegram ───────────────────────────────
             elif kind == "send_telegram":
                 cfg = load_config()
                 word = msg.get("word", "")
