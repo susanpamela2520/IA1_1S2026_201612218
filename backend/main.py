@@ -4,27 +4,27 @@ FastAPI + WebSocket para procesamiento en tiempo real
 """
 import json
 import time
+import numpy as np
 from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+import secrets
 
 from config import DEFAULT_CONFIG, load_config, save_config
 from ml_model import classifier
 from telegram_service import send_message, test_bot
 from vision import extract_landmarks
 
-
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
-import secrets
-
+# ─────────────────────────────────────────────
+#  Auth Admin
+# ─────────────────────────────────────────────
 security = HTTPBasic()
-
 ADMIN_USER     = "admin"
 ADMIN_PASSWORD = "handtalk2026"
 
@@ -38,8 +38,6 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
             headers={"WWW-Authenticate": "Basic"},
         )
     return credentials.username
-
-
 
 # ─────────────────────────────────────────────
 #  App
@@ -67,10 +65,9 @@ _metrics = {
     "low_confidence": 0,
     "messages_sent_ok": 0,
     "messages_sent_fail": 0,
-    "processing_times_ms": deque(maxlen=200),   # últimas 200 mediciones
+    "processing_times_ms": deque(maxlen=200),
     "errors": deque(maxlen=50),
 }
-
 
 def _add_to_history(config: dict, record: dict) -> dict:
     history = config.get("message_history", [])
@@ -80,14 +77,12 @@ def _add_to_history(config: dict, record: dict) -> dict:
     config["message_history"] = history
     return config
 
-
 # ─────────────────────────────────────────────
 #  Rutas estáticas
 # ─────────────────────────────────────────────
 @app.get("/")
 async def index():
     return FileResponse(str(FRONTEND_DIR / "index.html"))
-
 
 # ─────────────────────────────────────────────
 #  WebSocket — procesamiento en tiempo real
@@ -103,18 +98,56 @@ async def ws_endpoint(ws: WebSocket):
             msg = json.loads(raw)
             kind = msg.get("type")
 
-            # ── Procesar frame ──────────────────────────────────────────
-            if kind == "frame":
+            # ── Landmarks desde MediaPipe JS (navegador) ────────────────
+            if kind == "landmarks":
+                if not cfg.get("capture_active", True):
+                    await ws.send_text(json.dumps({"type": "paused"}))
+                    continue
+
+                _metrics["total_frames"] += 1
+                features_list = msg.get("data")
+                hand_found = msg.get("hand_detected", False)
+
+                if not hand_found or features_list is None:
+                    await ws.send_text(json.dumps({
+                        "type": "prediction",
+                        "hand_detected": False,
+                        "word": None,
+                        "confidence": 0.0,
+                        "annotated_image": None,
+                        "processing_ms": 0,
+                    }))
+                    continue
+
+                _metrics["hands_detected"] += 1
+                cfg = load_config()
+                features = np.array(features_list, dtype=np.float32)
+                word, conf = classifier.predict(features, cfg["confidence_threshold"])
+
+                if word:
+                    _metrics["successful_predictions"] += 1
+                else:
+                    _metrics["low_confidence"] += 1
+
+                await ws.send_text(json.dumps({
+                    "type": "prediction",
+                    "hand_detected": True,
+                    "word": word,
+                    "confidence": round(conf, 4),
+                    "annotated_image": None,
+                    "processing_ms": 0,
+                }))
+
+            # ── Frame completo (fallback local) ─────────────────────────
+            elif kind == "frame":
                 if not cfg.get("capture_active", True):
                     await ws.send_text(json.dumps({"type": "paused"}))
                     continue
 
                 t0 = time.perf_counter()
                 _metrics["total_frames"] += 1
-
                 frame_b64 = msg["data"]
                 features, annotated = extract_landmarks(frame_b64)
-
                 elapsed_ms = (time.perf_counter() - t0) * 1000
                 _metrics["processing_times_ms"].append(elapsed_ms)
 
@@ -130,7 +163,7 @@ async def ws_endpoint(ws: WebSocket):
                     continue
 
                 _metrics["hands_detected"] += 1
-                cfg = load_config()          # recarga para cambios en vivo
+                cfg = load_config()
                 word, conf = classifier.predict(features, cfg["confidence_threshold"])
 
                 if word:
@@ -149,53 +182,15 @@ async def ws_endpoint(ws: WebSocket):
                     "processing_ms": round(elapsed_ms, 1),
                 }))
 
-            #------- Enviar Landmarks a servidor-----*
-
-            elif kind == "landmarks":
-                if not cfg.get("capture_active", True):
-                    await ws.send_text(json.dumps({"type": "paused"}))
-                    continue
-
-                features_list = msg.get("features", [])
-                if not features_list or len(features_list) != 63:
-                    await ws.send_text(json.dumps({"type": "invalid_features"}))
-                    continue
-
-                import numpy as np
-                t0 = time.perf_counter()
-
-                _metrics["total_frames"] += 1
-                _metrics["hands_detected"] += 1
-
-                features = np.array(features_list, dtype=np.float32)
-                cfg = load_config()
-                word, conf = classifier.predict(features, cfg["confidence_threshold"])
-
-                if word:
-                    _metrics["successful_predictions"] += 1
-                else:
-                    _metrics["low_confidence"] += 1
-
-                await ws.send_text(json.dumps({
-                    "type": "prediction",
-                    "hand_detected": True,
-                    "word": word,
-                    "confidence": round(conf, 4),
-                    "annotated_image": msg.get("frame_b64"),
-                    "processing_ms": 0,
-                }))
-
-         # ── Enviar mensaje a Telegram ───────────────────────────────
+            # ── Enviar mensaje a Telegram ───────────────────────────────
             elif kind == "send_telegram":
                 cfg = load_config()
                 word = msg.get("word", "")
                 conf = msg.get("confidence", 0.0)
                 ts = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-
                 text = cfg["telegram_message_format"].format(
                     word=word, confidence=conf, timestamp=ts
                 )
-
                 if cfg.get("telegram_enabled", True):
                     result = send_message(
                         cfg["telegram_bot_token"],
@@ -212,7 +207,6 @@ async def ws_endpoint(ws: WebSocket):
                 else:
                     _metrics["messages_sent_fail"] += 1
 
-                # Guardar historial
                 cfg = _add_to_history(cfg, {
                     "word": word,
                     "confidence": round(conf, 4),
@@ -229,7 +223,7 @@ async def ws_endpoint(ws: WebSocket):
                     "error": result.get("error"),
                 }))
 
-            # ── Reload modelo desde disco ───────────────────────────────
+            # ── Reload modelo ───────────────────────────────────────────
             elif kind == "reload_model":
                 classifier.reload()
                 await ws.send_text(json.dumps({
@@ -245,105 +239,8 @@ async def ws_endpoint(ws: WebSocket):
 
 
 # ─────────────────────────────────────────────
-#  REST API — Módulo Administrador
+#  REST API — Módulo Administrador (con auth)
 # ─────────────────────────────────────────────
-
-@app.get("/api/config")
-async def get_config():
-    cfg = load_config()
-    # No exponer token en claro (ocultar parcialmente)
-    safe = cfg.copy()
-    if safe.get("telegram_bot_token"):
-        t = safe["telegram_bot_token"]
-        safe["telegram_bot_token"] = t[:6] + "..." + t[-4:] if len(t) > 10 else "***"
-    return safe
-
-
-@app.put("/api/config")
-async def update_config(body: dict):
-    cfg = load_config()
-    # Si el token viene parcialmente oculto, no sobrescribir
-    if "telegram_bot_token" in body:
-        if "..." in body["telegram_bot_token"]:
-            body.pop("telegram_bot_token")
-    cfg.update(body)
-    save_config(cfg)
-    return {"status": "ok"}
-
-
-@app.put("/api/config/token")
-async def update_token(body: dict):
-    """Ruta separada para actualizar el token completo."""
-    cfg = load_config()
-    if "telegram_bot_token" in body:
-        cfg["telegram_bot_token"] = body["telegram_bot_token"]
-    if "telegram_chat_id" in body:
-        cfg["telegram_chat_id"] = body["telegram_chat_id"]
-    save_config(cfg)
-    return {"status": "ok"}
-
-
-@app.post("/api/config/reset")
-async def reset_config():
-    save_config(DEFAULT_CONFIG.copy())
-    return {"status": "reset"}
-
-
-@app.get("/api/metrics")
-async def get_metrics():
-    times = list(_metrics["processing_times_ms"])
-    avg = sum(times) / len(times) if times else 0
-    total_p = _metrics["successful_predictions"] + _metrics["low_confidence"]
-    accuracy = _metrics["successful_predictions"] / total_p if total_p else 0
-
-    return {
-        "total_frames_processed": _metrics["total_frames"],
-        "hands_detected": _metrics["hands_detected"],
-        "successful_predictions": _metrics["successful_predictions"],
-        "low_confidence_predictions": _metrics["low_confidence"],
-        "messages_sent_ok": _metrics["messages_sent_ok"],
-        "messages_sent_fail": _metrics["messages_sent_fail"],
-        "avg_processing_ms": round(avg, 2),
-        "prediction_accuracy": round(accuracy, 4),
-        "recent_errors": list(_metrics["errors"]),
-    }
-
-
-@app.get("/api/history")
-async def get_history():
-    cfg = load_config()
-    return {"history": cfg.get("message_history", [])}
-
-
-@app.delete("/api/history")
-async def clear_history():
-    cfg = load_config()
-    cfg["message_history"] = []
-    save_config(cfg)
-    return {"status": "cleared"}
-
-
-@app.get("/api/model/status")
-async def model_status():
-    return {
-        "loaded": classifier.is_loaded,
-        "classes": classifier.classes,
-        "model_path": str(Path("../models/model.pkl").resolve()),
-    }
-
-
-@app.post("/api/telegram/test")
-async def telegram_test():
-    cfg = load_config()
-    result = test_bot(cfg["telegram_bot_token"], cfg["telegram_chat_id"])
-    return result
-
-
-@app.get("/api/signs")
-async def get_signs():
-    cfg = load_config()
-    return {"signs": cfg["available_signs"]}
-
 
 @app.get("/api/config")
 async def get_config(user: str = Depends(verify_admin)):
@@ -378,3 +275,52 @@ async def update_token(body: dict, user: str = Depends(verify_admin)):
 async def reset_config(user: str = Depends(verify_admin)):
     save_config(DEFAULT_CONFIG.copy())
     return {"status": "reset"}
+
+@app.get("/api/metrics")
+async def get_metrics():
+    times = list(_metrics["processing_times_ms"])
+    avg = sum(times) / len(times) if times else 0
+    total_p = _metrics["successful_predictions"] + _metrics["low_confidence"]
+    accuracy = _metrics["successful_predictions"] / total_p if total_p else 0
+    return {
+        "total_frames_processed": _metrics["total_frames"],
+        "hands_detected": _metrics["hands_detected"],
+        "successful_predictions": _metrics["successful_predictions"],
+        "low_confidence_predictions": _metrics["low_confidence"],
+        "messages_sent_ok": _metrics["messages_sent_ok"],
+        "messages_sent_fail": _metrics["messages_sent_fail"],
+        "avg_processing_ms": round(avg, 2),
+        "prediction_accuracy": round(accuracy, 4),
+        "recent_errors": list(_metrics["errors"]),
+    }
+
+@app.get("/api/history")
+async def get_history():
+    cfg = load_config()
+    return {"history": cfg.get("message_history", [])}
+
+@app.delete("/api/history")
+async def clear_history():
+    cfg = load_config()
+    cfg["message_history"] = []
+    save_config(cfg)
+    return {"status": "cleared"}
+
+@app.get("/api/model/status")
+async def model_status():
+    return {
+        "loaded": classifier.is_loaded,
+        "classes": classifier.classes,
+        "model_path": str(Path("../models/model.pkl").resolve()),
+    }
+
+@app.post("/api/telegram/test")
+async def telegram_test():
+    cfg = load_config()
+    result = test_bot(cfg["telegram_bot_token"], cfg["telegram_chat_id"])
+    return result
+
+@app.get("/api/signs")
+async def get_signs():
+    cfg = load_config()
+    return {"signs": cfg["available_signs"]}
