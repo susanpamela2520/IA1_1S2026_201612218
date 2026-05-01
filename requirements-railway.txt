@@ -1,6 +1,6 @@
 fastapi==0.111.0
 uvicorn[standard]==0.29.0
-mediapipe-silicon==0.10.35
+mediapipe==0.10.35
 scikit-learn
 numpy
 requests==2.31.0
