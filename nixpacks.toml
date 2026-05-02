@@ -1,2 +1,2 @@
 [phases.setup]
-nixPkgs = ["libglib2.0", "libGL"]
+nixPkgs = ["libGL", "glib"]
