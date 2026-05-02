@@ -18,6 +18,29 @@ from ml_model import classifier
 from telegram_service import send_message, test_bot
 from vision import extract_landmarks
 
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+import secrets
+
+security = HTTPBasic()
+
+ADMIN_USER     = "admin"
+ADMIN_PASSWORD = "handtalk2026"
+
+def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
+    ok_user = secrets.compare_digest(credentials.username, ADMIN_USER)
+    ok_pass = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
+    if not (ok_user and ok_pass):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales incorrectas",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+
+
 # ─────────────────────────────────────────────
 #  App
 # ─────────────────────────────────────────────
@@ -284,3 +307,38 @@ async def telegram_test():
 async def get_signs():
     cfg = load_config()
     return {"signs": cfg["available_signs"]}
+
+
+@app.get("/api/config")
+async def get_config(user: str = Depends(verify_admin)):
+    cfg = load_config()
+    safe = cfg.copy()
+    if safe.get("telegram_bot_token"):
+        t = safe["telegram_bot_token"]
+        safe["telegram_bot_token"] = t[:6] + "..." + t[-4:] if len(t) > 10 else "***"
+    return safe
+
+@app.put("/api/config")
+async def update_config(body: dict, user: str = Depends(verify_admin)):
+    cfg = load_config()
+    if "telegram_bot_token" in body:
+        if "..." in body["telegram_bot_token"]:
+            body.pop("telegram_bot_token")
+    cfg.update(body)
+    save_config(cfg)
+    return {"status": "ok"}
+
+@app.put("/api/config/token")
+async def update_token(body: dict, user: str = Depends(verify_admin)):
+    cfg = load_config()
+    if "telegram_bot_token" in body:
+        cfg["telegram_bot_token"] = body["telegram_bot_token"]
+    if "telegram_chat_id" in body:
+        cfg["telegram_chat_id"] = body["telegram_chat_id"]
+    save_config(cfg)
+    return {"status": "ok"}
+
+@app.post("/api/config/reset")
+async def reset_config(user: str = Depends(verify_admin)):
+    save_config(DEFAULT_CONFIG.copy())
+    return {"status": "reset"}

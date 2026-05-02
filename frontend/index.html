@@ -299,6 +299,37 @@
 </head>
 <body>
 
+<!-- LOGIN MODAL -->
+<div id="loginModal" style="
+  position:fixed;inset:0;background:rgba(0,0,0,0.85);
+  display:flex;align-items:center;justify-content:center;z-index:9999">
+  <div style="background:#13161b;border:1px solid #252930;border-radius:12px;padding:2rem;width:320px">
+    <h2 style="color:#00e5a0;font-family:monospace;margin-bottom:1.5rem;text-align:center">
+      🔐 HandTalk AI — Admin
+    </h2>
+    <div style="margin-bottom:1rem">
+      <label style="color:#6b7280;font-size:0.8rem">USUARIO</label>
+      <input id="loginUser" type="text" placeholder="admin"
+        style="width:100%;padding:0.6rem;margin-top:0.3rem;background:#1c2028;
+        border:1px solid #252930;border-radius:6px;color:#fff;font-size:0.9rem"/>
+    </div>
+    <div style="margin-bottom:1.5rem">
+      <label style="color:#6b7280;font-size:0.8rem">CONTRASEÑA</label>
+      <input id="loginPass" type="password" placeholder="••••••••"
+        style="width:100%;padding:0.6rem;margin-top:0.3rem;background:#1c2028;
+        border:1px solid #252930;border-radius:6px;color:#fff;font-size:0.9rem"/>
+    </div>
+    <p id="loginError" style="color:#ff5252;font-size:0.8rem;margin-bottom:1rem;display:none">
+      ❌ Credenciales incorrectas
+    </p>
+    <button onclick="doLogin()"
+      style="width:100%;padding:0.75rem;background:#00e5a0;color:#000;
+      border:none;border-radius:8px;font-weight:bold;font-size:1rem;cursor:pointer">
+      Ingresar
+    </button>
+  </div>
+</div>
+
 <!-- ─── Header ─────────────────────────────────────────────────────────────── -->
 <header>
   <div class="logo">
@@ -530,6 +561,40 @@
 
 <!-- ─── SCRIPT ────────────────────────────────────────────────────────────────── -->
 <script>
+
+// ── Login ─────────────────────────────────────────────────────────────────────
+let adminCredentials = null;
+
+function doLogin() {
+  const user = document.getElementById('loginUser').value;
+  const pass = document.getElementById('loginPass').value;
+
+  // Verificar credenciales contra el backend
+  fetch('/api/config', {
+    headers: {
+      'Authorization': 'Basic ' + btoa(user + ':' + pass)
+    }
+  }).then(res => {
+    if (res.ok) {
+      adminCredentials = btoa(user + ':' + pass);
+      document.getElementById('loginModal').style.display = 'none';
+      loadConfig();
+      loadModelStatus();
+    } else {
+      document.getElementById('loginError').style.display = 'block';
+    }
+  }).catch(() => {
+    document.getElementById('loginError').style.display = 'block';
+  });
+}
+
+// Enter para hacer login
+document.addEventListener('keypress', function(e) {
+  if (e.key === 'Enter' && document.getElementById('loginModal').style.display !== 'none') {
+    doLogin();
+  }
+});
+
 // ── State ────────────────────────────────────────────────────────────────────
 const state = {
   ws: null,
@@ -549,8 +614,6 @@ function connectWS() {
 
   state.ws.onopen = () => {
     setConnStatus(true);
-    loadConfig();
-    loadModelStatus();
   };
 
   state.ws.onclose = () => {

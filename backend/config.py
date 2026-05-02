@@ -1,9 +1,9 @@
-"""
-config.py - Gestión de configuración del sistema HandTalk AI
-"""
 import json
 import os
 from pathlib import Path
+
+""" Gestión de configuración del sistema HandTalk AI
+"""
 
 CONFIG_FILE = Path("../config/settings.json")
 
@@ -12,7 +12,7 @@ DEFAULT_CONFIG = {
     "telegram_enabled": True,
     "telegram_bot_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
     "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", ""),
-    "telegram_message_format": "🤟 HandTalk AI detectó: *{word}*\n📊 Confianza: {confidence:.0%}\n🕐 {timestamp}",
+    "telegram_message_format": " HandTalk AI detectó: *{word}*\n Confianza: {confidence:.0%}\n {timestamp}",
     "available_signs": [
         "hola", "gracias", "ayuda", "si", "no",
         "por_favor", "bien", "mal", "agua", "comida"
